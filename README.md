@@ -1,112 +1,58 @@
-# INY1105 — EA3: Orquestación de Contenedores con Kubernetes y AWS EKS
+# Evaluación Parcial N°3: Despliegue de Redmine + PostgreSQL en AWS EKS 
+# Autor
+Jesús Quijada 
 
-**INY1105 — Infraestructura de Aplicaciones I**  
-DuocUC · Escuela de Informática y Telecomunicaciones · 2026/1
+## 1. Descripción de la Arquitectura
+La arquitectura implementada despliega la herramienta de gestión de proyectos Redmine (frontend) conectada a una base de datos PostgreSQL (backend) sobre un cluster de Kubernetes en AWS EKS. Toda la infraestructura se encuentra alojada en el namespace `pmotrack`
 
----
+El flujo de acceso permite a los usuarios interactuar con Redmine a través de internet mediante un Service de tipo NodePort. Por su parte, el backend está aislado y cuenta con persistencia de datos. Además, el frontend está protegido ante picos de tráfico mediante una política de autoescalado.
 
-## Instrucciones
+## 2. Decisiones Técnicas
+Para el cumplimiento de los requerimientos de PMOTrack, se tomaron las siguientes decisiones de diseño:
 
-### 1. Crea tu propio repositorio desde este template
+* Imágenes de Contenedores: Se utilizaron las imágenes oficiales `postgres:16` para el motor de base de datos y `redmine:5` para la interfaz web.
+* Gestión de Secretos: Para mantener la seguridad, las variables de entorno críticas (`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`) se extrajeron del manifiesto del Deployment y se aislaron utilizando un objeto `Secret` de Kubernetes.
+* Tipos de Service: Para PostgreSQL, se implementó un Service de tipo `ClusterIP` en el puerto 5432. Esto restringe el acceso de la base de datos de forma estricta a la red interna del cluster, aumentando la seguridad.
+* Para Redmine, se empleó un Service de tipo `NodePort` para exponer la aplicación hacia el exterior, permitiendo el acceso del usuario desde su navegador.
+* Almacenamiento Persistente: Se configuró un `PersistentVolume` (PV) tipo `hostPath` junto con su respectivo `PersistentVolumeClaim` (PVC), montados en la ruta `/var/lib/postgresql/data` del contenedor de la base de datos. Esto asegura que la información persista en el disco del nodo y sobreviva al ciclo de vida efímero del Pod.
+* Autoescalado (HPA): Se habilitó un `HorizontalPodAutoscaler` para el Deployment del frontend. Se estableció un límite mínimo de 1 réplica y un máximo de 5 réplicas, configurando un umbral de CPU del 50%. Esto garantiza disponibilidad y eficiencia de recursos bajo cargas imprevistas.
 
-1. Haz clic en el botón **"Use this template"** → **"Create a new repository"**
-2. En el campo **Repository name** escribe: `iny1105-ea3-nombre-apellido` (usa tu nombre real)
-3. Selecciona **Private**
-4. Haz clic en **"Create repository"**
+##3. Instrucciones de Despliegue 
 
-> **Importante:** El repositorio debe quedar en **tu cuenta personal** de GitHub.  
-> El nombre debe seguir el formato `iny1105-ea3-nombre-apellido` exactamente.
+Sigue estos pasos desde la terminal de AWS CloudShell para desplegar la arquitectura completa:
 
----
-
-### 2. Clona tu repositorio
-
+Paso 1: Preparación del cluster
 ```bash
-git clone https://github.com/tu-usuario/iny1105-ea3-nombre-apellido.git
-cd iny1105-ea3-nombre-apellido
-```
+ Ejecutar configuración inicial
+bash commons/scripts/setup-cloudshell.sh
 
----
+# Crear el cluster EKS
+bash commons/scripts/create-cluster.sh 
+# Crear el namespace
+kubectl create namespace pmotrack
 
-### 3. Estructura del repositorio
+Paso 2: Despliegue del Backend (PostgreSQL)
 
-```
-iny1105-ea3-nombre-apellido/
-├── act31/                  ← Act 3.1: Introducción a Kubernetes y AWS EKS
-│   ├── Dockerfile          ← completar: imagen base Prometheus
-│   ├── manifests/
-│   │   ├── deployment.yaml ← completar: secciones TODO
-│   │   └── service.yaml    ← completar: secciones TODO
-│   └── README.md
-├── act32/                  ← Act 3.2: Objetos de Kubernetes
-│   ├── manifests/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   └── configmap.yaml  ← completar: secciones TODO
-│   └── README.md
-├── act33/                  ← Act 3.3: WordPress + MySQL (almacenamiento, networking y autoscaling)
-│   ├── manifests/          ← PVC (EBS/EFS), Deployments, Services, Ingress (ALB),
-│   │                          HPA y NetworkPolicy
-│   └── README.md
-├── commons/
-│   └── scripts/
-│       ├── setup-cloudshell.sh ← instala kubectl y Terraform en AWS CloudShell
-│       ├── create-cluster.sh   ← crea el cluster EKS
-│       ├── delete-cluster.sh   ← elimina el cluster EKS
-│       └── apply-manifests.sh  ← SOLO act31: aplica todos los manifiestos de una vez
-├── .gitignore
-└── README.md               ← este archivo
-```
+Bash
+# Aplicar manifiestos de base de datos, almacenamiento y secretos
+kubectl apply -f manifests/postgres-secret.yaml -n pmotrack
+kubectl apply -f manifests/postgres-storage.yaml -n pmotrack
+kubectl apply -f manifests/postgres-deployment.yaml -n pmotrack
+kubectl apply -f manifests/postgres-service.yaml -n pmotrack
 
----
+Paso 3: Despliegue del Frontend Redmine
 
-### 4. Flujo de trabajo por actividad
+# Aplicar manifiestos de la aplicación web y su servicio de red
+kubectl apply -f manifests/redmine-deployment.yaml -n pmotrack
+kubectl apply -f manifests/redmine-service.yaml -n pmotrack
 
-```
-[1] Leer el README.md de la carpeta actXX/
-        ↓
-[2] Completar los archivos marcados con # TODO
-        ↓
-[3] Aplicar los manifiestos con kubectl apply
-        ↓
-[4] Verificar el despliegue con kubectl get pods/svc
-        ↓
-[5] Hacer commit y push con tus cambios
-```
+# Habilitar el acceso externo abriendo el NodePort asignado en el firewall de AWS
+bash commons/scripts/open-nodeport.sh 31980
 
----
+Paso 4: Configuración de autoescalado
 
-### 5. Scripts de utilidad
+# Instalar el servidor de métricas
+kubectl apply -f [https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml](https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml)
 
-Desde la raíz del repositorio:
-
-```bash
-# Crear el cluster EKS (necesario al inicio de cada clase)
-bash commons/scripts/create-cluster.sh
-
-# Eliminar el cluster EKS (obligatorio al terminar cada clase)
-bash commons/scripts/delete-cluster.sh
-
-# Aplicar todos los manifiestos de UNA actividad (solo act31)
-bash commons/scripts/apply-manifests.sh act31
-```
-
-> **Importante:** El script `apply-manifests.sh` se usa **solo en la Act 3.1**,
-> como introducción. En las actividades 3.2, 3.3 y 3.4 aplicarás los manifiestos
-> **manualmente** con `kubectl apply -f manifests/<archivo>.yaml`, respetando el
-> orden indicado en el README de cada actividad. Así aprendes las dependencias
-> entre objetos de Kubernetes.
-
----
-
-### 6. Subir tu trabajo
-
-```bash
-git add .
-git commit -m "feat: act3X completada - Nombre Apellido"
-git push origin main
-```
-
----
-
-*Docente: Rodrigo Aguilar G. — r.aguilarg@profesor.duoc.cl*
+# Aplicar manifiesto HPA
+kubectl apply -f manifests/redmine-hpa.yaml -n pmotrack
